@@ -19,7 +19,11 @@ import {
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
-import { notifyTelegramInboundTurnOutboundSuccess } from "./inbound-turn-delivery.js";
+import { answerTelegramGuestQuery } from "./guest-query.js";
+import {
+  notifyTelegramInboundTurnOutboundSuccess,
+  resolveTelegramInboundTurnGuestQuery,
+} from "./inbound-turn-delivery.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
@@ -377,6 +381,31 @@ export async function handleTelegramAction(
       throw new Error(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
+    }
+    const guestTurn = resolveTelegramInboundTurnGuestQuery({
+      sessionKey: options?.sessionKey ?? undefined,
+      to: String(to),
+      accountId,
+    });
+    if (guestTurn) {
+      await answerTelegramGuestQuery({
+        token,
+        guestQueryId: guestTurn.guestQueryId,
+        text:
+          content.trim() ||
+          "I generated a reply, but Telegram Guest Mode can only receive a single text response here.",
+      });
+      notifyTelegramInboundTurnOutboundSuccess({
+        sessionKey: options?.sessionKey ?? undefined,
+        to: String(to),
+        accountId,
+      });
+      return jsonResult({
+        ok: true,
+        messageId: `guest:${guestTurn.guestQueryId}`,
+        chatId: to,
+        guestQueryId: guestTurn.guestQueryId,
+      });
     }
     const result = await telegramActionRuntime.sendMessageTelegram(to, content, {
       cfg,

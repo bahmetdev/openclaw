@@ -155,6 +155,15 @@ const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
+const CODEX_NATIVE_CODE_TOOL_NAMES = [
+  "exec",
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "process",
+  "web_search",
+] as const;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
 const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
@@ -719,6 +728,7 @@ export async function runCodexAppServerAttempt(
       sessionKey: sandboxSessionKey,
       config: params.config,
       runId: params.runId,
+      toolsAllow: params.toolsAllow,
       attemptTimeoutMs: params.timeoutMs,
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,
@@ -2086,6 +2096,7 @@ function createCodexNativeHookRelay(params: {
   sessionKey: string | undefined;
   config: EmbeddedRunAttemptParams["config"];
   runId: string;
+  toolsAllow: EmbeddedRunAttemptParams["toolsAllow"];
   attemptTimeoutMs: number;
   startupTimeoutMs: number;
   turnStartTimeoutMs: number;
@@ -2107,6 +2118,7 @@ function createCodexNativeHookRelay(params: {
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     allowedEvents: params.events,
+    blockedToolNames: resolveBlockedCodexNativeToolNames(params.toolsAllow),
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options?.ttlMs,
       attemptTimeoutMs: params.attemptTimeoutMs,
@@ -2118,6 +2130,21 @@ function createCodexNativeHookRelay(params: {
       timeoutMs: params.options?.gatewayTimeoutMs,
     },
   });
+}
+
+function resolveBlockedCodexNativeToolNames(
+  toolsAllow: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (toolsAllow === undefined) {
+    return undefined;
+  }
+  const allowSet = new Set(
+    toolsAllow.map((name) => normalizeCodexDynamicToolName(name)).filter(Boolean),
+  );
+  if (allowSet.has("*")) {
+    return undefined;
+  }
+  return CODEX_NATIVE_CODE_TOOL_NAMES.filter((name) => !allowSet.has(name));
 }
 
 function resolveCodexNativeHookRelayEvents(params: {

@@ -110,6 +110,7 @@ export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
+const TELEGRAM_DIRECT_REPLY_TOOLS_ALLOW = ["message"];
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -405,6 +406,14 @@ export const dispatchTelegramMessage = async ({
     removeAckAfterReply,
     statusReactionController,
   } = context;
+  const guestQueryId = ctxPayload.GuestQueryId;
+  const directReplyRuntimeOptions =
+    !isGroup && !guestQueryId
+      ? {
+          bootstrapContextMode: "lightweight" as const,
+          toolsAllow: TELEGRAM_DIRECT_REPLY_TOOLS_ALLOW,
+        }
+      : {};
   const statusReactionTiming = {
     ...DEFAULT_TIMING,
     ...cfg.messages?.statusReactions?.timing,
@@ -488,7 +497,7 @@ export const dispatchTelegramMessage = async ({
   });
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
-  const streamDeliveryEnabled = streamMode !== "off";
+  const streamDeliveryEnabled = streamMode !== "off" && !guestQueryId;
   const rawReplyQuoteText =
     ctxPayload.ReplyToIsQuote && typeof ctxPayload.ReplyToQuoteText === "string"
       ? ctxPayload.ReplyToQuoteText
@@ -871,6 +880,7 @@ export const dispatchTelegramMessage = async ({
     {
       outboundTo: String(chatId),
       outboundAccountId: route.accountId,
+      guestQueryId,
       markInboundTurnDelivered: () => deliveryState.markDelivered(),
     },
   );
@@ -900,6 +910,7 @@ export const dispatchTelegramMessage = async ({
     tableMode,
     chunkMode,
     linkPreview: telegramCfg.linkPreview,
+    guestQueryId,
     replyQuoteMessageId,
     replyQuoteText,
     replyQuotePosition,
@@ -1021,7 +1032,7 @@ export const dispatchTelegramMessage = async ({
       const deliverablePayload = applyQuoteReplyTarget(payload);
       const silent = options?.silent ?? (silentErrorReplies && payload.isError === true);
       const durableDelivery = telegramDeps.deliverInboundReplyWithMessageSendContext;
-      if (options?.durable && durableDelivery) {
+      if (options?.durable && durableDelivery && !guestQueryId) {
         const durable = await durableDelivery({
           cfg,
           channel: "telegram",
@@ -1433,6 +1444,7 @@ export const dispatchTelegramMessage = async ({
                   },
                 },
                 replyOptions: {
+                  ...directReplyRuntimeOptions,
                   skillFilter,
                   disableBlockStreaming,
                   onPartialReply:

@@ -64,6 +64,11 @@ export type GetReplyOptions = {
   fastModeOverride?: boolean;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
+  /**
+   * Restrict tools for this run. Channel-owned lightweight turns can keep only
+   * the delivery tool available instead of exposing the full workspace toolset.
+   */
+  toolsAllow?: string[];
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
   /** If true, run the model without OpenClaw tools for this turn. */

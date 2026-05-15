@@ -2872,6 +2872,38 @@ describe("runCodexAppServerAttempt", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
+  it("registers native hook relay blocks when toolsAllow excludes Codex code tools", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["message"];
+
+    const run = runCodexAppServerAttempt(params, {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+    expect(registration?.blockedToolNames).toEqual([
+      "exec",
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "process",
+      "web_search",
+    ]);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("keeps the native hook relay default floor for short Codex turns", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

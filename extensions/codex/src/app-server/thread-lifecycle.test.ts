@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildThreadResumeParams,
   buildThreadStartParams,
+  buildTurnCollaborationMode,
   resolveReasoningEffort,
 } from "./thread-lifecycle.js";
 
@@ -13,6 +14,7 @@ function createAttemptParams(params: {
   authProfileProviders?: Record<string, string>;
   bootstrapContextMode?: "full" | "lightweight";
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  toolsAllow?: string[];
 }): EmbeddedRunAttemptParams {
   const authProfileProviders =
     params.authProfileProviders ??
@@ -27,6 +29,7 @@ function createAttemptParams(params: {
     ...(params.bootstrapContextRunKind
       ? { bootstrapContextRunKind: params.bootstrapContextRunKind }
       : {}),
+    ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
     authProfileStore: {
       version: 1,
       profiles: Object.fromEntries(
@@ -114,6 +117,66 @@ describe("Codex app-server native code mode config", () => {
     });
   });
 
+  it("disables Codex code mode when the run allowlist excludes native coding tools", () => {
+    const request = buildThreadStartParams(
+      createAttemptParams({
+        provider: "openai",
+        bootstrapContextMode: "lightweight",
+        toolsAllow: ["message"],
+      }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+      },
+    );
+
+    expect(request.config).toEqual({
+      project_doc_max_bytes: 0,
+      "features.code_mode": false,
+      "features.code_mode_only": false,
+    });
+  });
+
+  it("keeps Codex code mode when the run allowlist includes a native coding tool", () => {
+    const request = buildThreadStartParams(
+      createAttemptParams({
+        provider: "openai",
+        bootstrapContextMode: "lightweight",
+        toolsAllow: ["message", "exec"],
+      }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+      },
+    );
+
+    expect(request.config).toEqual({
+      project_doc_max_bytes: 0,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
+  });
+
+  it("adds turn instructions when native Codex tools are suppressed", () => {
+    const mode = buildTurnCollaborationMode(
+      createAttemptParams({ provider: "openai", toolsAllow: ["message"] }),
+    );
+
+    expect(mode.settings.developer_instructions).toContain("Do not use Codex native code tools");
+    expect(mode.settings.developer_instructions).toContain("`message`");
+  });
+
+  it("does not add native tool suppression instructions when native tools are allowed", () => {
+    const mode = buildTurnCollaborationMode(
+      createAttemptParams({ provider: "openai", toolsAllow: ["message", "exec"] }),
+    );
+
+    expect(mode.settings.developer_instructions).toBeNull();
+  });
   it("keeps native Codex project docs enabled when context is not lightweight", () => {
     const request = buildThreadResumeParams(
       createAttemptParams({ provider: "openai", bootstrapContextRunKind: "cron" }),

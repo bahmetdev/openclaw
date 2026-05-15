@@ -54,6 +54,7 @@ export type TelegramInboundContextPayload = BuiltChannelTurnContext & {
   ReplyToQuoteEntities?: TelegramReplyTarget["quoteEntities"];
   ReplyToQuoteSourceText?: string;
   ReplyToQuoteSourceEntities?: TelegramReplyTarget["quoteSourceEntities"];
+  GuestQueryId?: string;
 };
 
 type TelegramMessageContextSessionRuntime =
@@ -415,6 +416,10 @@ export async function buildTelegramInboundContextPayload(params: {
   const telegramTo = `telegram:${chatId}`;
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
   const commandSource = options?.commandSource;
+  const guestQueryId =
+    typeof (msg as { guest_query_id?: unknown }).guest_query_id === "string"
+      ? (msg as unknown as { guest_query_id: string }).guest_query_id
+      : undefined;
   const ctxPayload = sessionRuntime.buildChannelTurnContext({
     channel: "telegram",
     accountId: route.accountId,
@@ -540,6 +545,7 @@ export async function buildTelegramInboundContextPayload(params: {
       ...locationContext,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
+      GuestQueryId: guestQueryId,
     },
   } satisfies BuildChannelTurnContextParams);
 

@@ -15,6 +15,7 @@ import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
+import { normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 import {
   isCodexPluginThreadBindingStale,
   mergeCodexThreadConfigs,
@@ -64,6 +65,20 @@ export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
   "features.code_mode_only": true,
 };
+
+const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
+  "features.code_mode": false,
+  "features.code_mode_only": false,
+};
+
+const CODEX_NATIVE_CODING_TOOL_NAMES = new Set([
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+]);
 
 const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
   project_doc_max_bytes: 0,
@@ -515,9 +530,15 @@ export function buildThreadResumeParams(
   };
 }
 
-export function buildCodexRuntimeThreadConfig(config: JsonObject | undefined): JsonObject {
-  const runtimeConfig = mergeCodexThreadConfigs(config, CODEX_CODE_MODE_THREAD_CONFIG) ?? {
-    ...CODEX_CODE_MODE_THREAD_CONFIG,
+export function buildCodexRuntimeThreadConfig(
+  config: JsonObject | undefined,
+  params?: Pick<EmbeddedRunAttemptParams, "toolsAllow">,
+): JsonObject {
+  const codeModeConfig = shouldEnableCodexCodeMode(params)
+    ? CODEX_CODE_MODE_THREAD_CONFIG
+    : CODEX_CODE_MODE_DISABLED_THREAD_CONFIG;
+  const runtimeConfig = mergeCodexThreadConfigs(config, codeModeConfig) ?? {
+    ...codeModeConfig,
   };
   return runtimeConfig;
 }
@@ -526,7 +547,7 @@ function buildCodexRuntimeThreadConfigForRun(
   params: EmbeddedRunAttemptParams,
   config: JsonObject | undefined,
 ): JsonObject {
-  const runtimeConfig = buildCodexRuntimeThreadConfig(config);
+  const runtimeConfig = buildCodexRuntimeThreadConfig(config, params);
   if (params.bootstrapContextMode !== "lightweight") {
     return runtimeConfig;
   }
@@ -536,6 +557,20 @@ function buildCodexRuntimeThreadConfigForRun(
       ...CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG,
     }
   );
+}
+
+function shouldEnableCodexCodeMode(params?: Pick<EmbeddedRunAttemptParams, "toolsAllow">): boolean {
+  const toolsAllow = params?.toolsAllow;
+  if (toolsAllow === undefined) {
+    return true;
+  }
+  if (toolsAllow.length === 0) {
+    return false;
+  }
+  return toolsAllow.some((toolName) => {
+    const normalized = normalizeCodexDynamicToolName(toolName);
+    return normalized === "*" || CODEX_NATIVE_CODING_TOOL_NAMES.has(normalized);
+  });
 }
 
 export function buildTurnStartParams(
@@ -577,13 +612,27 @@ export function buildTurnCollaborationMode(
 }
 
 function buildTurnScopedCollaborationInstructions(params: EmbeddedRunAttemptParams): string | null {
+  const instructions: string[] = [];
+  if (shouldSuppressCodexNativeCodeTools(params)) {
+    instructions.push(buildNativeCodeToolsSuppressedInstructions());
+  }
   if (params.trigger === "cron") {
-    return buildCronCollaborationInstructions();
+    instructions.push(buildCronCollaborationInstructions());
+  } else if (params.trigger === "heartbeat") {
+    instructions.push(buildHeartbeatCollaborationInstructions());
   }
-  if (params.trigger === "heartbeat") {
-    return buildHeartbeatCollaborationInstructions();
-  }
-  return null;
+  return instructions.length > 0 ? instructions.join("\n\n") : null;
+}
+
+function shouldSuppressCodexNativeCodeTools(params: EmbeddedRunAttemptParams): boolean {
+  return params.toolsAllow !== undefined && !shouldEnableCodexCodeMode(params);
+}
+
+function buildNativeCodeToolsSuppressedInstructions(): string {
+  return [
+    "This OpenClaw run has a restricted tool allowlist. Do not use Codex native code tools such as bash/exec, file read/write/edit, apply_patch, process control, or native web search.",
+    "Answer from the user message and the context already provided by OpenClaw. If you need to reply visibly, use only the OpenClaw tools available in this run, such as `message` when present.",
+  ].join("\n\n");
 }
 
 function buildCronCollaborationInstructions(): string {
