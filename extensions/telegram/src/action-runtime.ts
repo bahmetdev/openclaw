@@ -30,7 +30,11 @@ import {
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
-import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
+import { answerTelegramGuestQuery } from "./guest-query.js";
+import {
+  notifyTelegramInboundEventOutboundSuccess,
+  resolveTelegramInboundEventGuestQuery,
+} from "./inbound-event-delivery.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
@@ -487,6 +491,26 @@ export async function handleTelegramAction(
       throw new Error(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
+    }
+    const deliveryTarget = formatTelegramDeliveryTarget(to, messageThreadId);
+    const guestQuery = resolveTelegramInboundEventGuestQuery({
+      sessionKey: options?.sessionKey ?? undefined,
+      to: deliveryTarget,
+      accountId,
+      inboundEventKind: options?.inboundEventKind,
+    });
+    if (guestQuery) {
+      await answerTelegramGuestQuery({
+        token,
+        guestQueryId: guestQuery.guestQueryId,
+        text: content,
+      });
+      notifyVisibleOutboundSuccess(to, messageThreadId);
+      return jsonResult({
+        ok: true,
+        guestQueryId: guestQuery.guestQueryId,
+        chatId: to,
+      });
     }
     const sendOptions = {
       cfg,

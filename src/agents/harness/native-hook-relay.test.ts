@@ -1622,6 +1622,43 @@ describe("native hook relay registry", () => {
     }
   });
 
+  it("blocks configured native tools before plugin hooks run", async () => {
+    const beforeToolCall = vi.fn(async () => ({ block: false }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      blockedToolNames: ["exec"],
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_use_id: "native-call-1",
+        tool_input: { command: "pwd" },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Tool exec is not available for this OpenClaw run.",
+      },
+    });
+    expect(response.exitCode).toBe(0);
+    expect(beforeToolCall).not.toHaveBeenCalled();
+  });
+
   it("maps Codex PreToolUse to OpenClaw before_tool_call and blocks before execution", async () => {
     const beforeToolCall = vi.fn(async () => ({
       block: true,

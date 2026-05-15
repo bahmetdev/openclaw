@@ -113,6 +113,7 @@ export type TelegramMessageContext = {
   removeAckAfterReply: boolean;
   statusReactionController: TelegramStatusReactionController | null;
   accountId: string;
+  guestQueryId?: string;
 };
 
 export const buildTelegramMessageContext = async ({
@@ -143,6 +144,10 @@ export const buildTelegramMessageContext = async ({
   sendChatActionHandler,
 }: BuildTelegramMessageContextParams): Promise<TelegramMessageContext | null> => {
   const msg = primaryCtx.message;
+  const guestQueryId =
+    typeof (msg as { guest_query_id?: unknown }).guest_query_id === "string"
+      ? (msg as { guest_query_id: string }).guest_query_id
+      : undefined;
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const senderId = msg.from?.id ? String(msg.from.id) : "";
@@ -666,5 +671,6 @@ export const buildTelegramMessageContext = async ({
     removeAckAfterReply,
     statusReactionController,
     accountId: account.accountId,
+    guestQueryId,
   };
 };

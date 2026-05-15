@@ -107,6 +107,7 @@ export type NativeHookRelayRegistration = {
   runId: string;
   channelId?: string;
   allowedEvents: readonly NativeHookRelayEvent[];
+  blockedToolNames?: readonly string[];
   expiresAtMs: number;
   signal?: AbortSignal;
   onPreToolUseFailure?: (failure: {
@@ -140,6 +141,7 @@ export type RegisterNativeHookRelayParams = {
   runId: string;
   channelId?: string;
   allowedEvents?: readonly NativeHookRelayEvent[];
+  blockedToolNames?: readonly string[];
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;
@@ -451,6 +453,7 @@ export function registerNativeHookRelay(
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents,
+    ...optionalBlockedToolNames(params.blockedToolNames),
     expiresAtMs,
     preToolUseFailureProjections: new Map(),
     ...(params.signal ? { signal: params.signal } : {}),
@@ -1470,6 +1473,11 @@ async function runNativeHookRelayPreToolUse(params: {
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
+  if (isNativeHookToolBlocked(toolName, params.registration.blockedToolNames)) {
+    return params.adapter.renderPreToolUseBlockResponse(
+      `Tool ${toolName} is not available for this OpenClaw run.`,
+    );
+  }
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
   const originalToolInputFingerprint = stableStringify(toolInput);
   const approvalMode = readNativeHookRelayApprovalMode(params.invocation.rawPayload);
@@ -2264,6 +2272,27 @@ function normalizeAllowedEvents(
     return NATIVE_HOOK_RELAY_EVENTS;
   }
   return [...new Set(events)];
+}
+
+function optionalBlockedToolNames(
+  toolNames: readonly string[] | undefined,
+): { blockedToolNames: readonly string[] } | Record<string, never> {
+  const normalized = normalizeBlockedToolNames(toolNames);
+  return normalized.length > 0 ? { blockedToolNames: normalized } : {};
+}
+
+function normalizeBlockedToolNames(toolNames: readonly string[] | undefined): readonly string[] {
+  if (!toolNames?.length) {
+    return [];
+  }
+  return [...new Set(toolNames.map((name) => normalizeToolName(name)).filter(Boolean))];
+}
+
+function isNativeHookToolBlocked(
+  toolName: string,
+  blockedToolNames: readonly string[] | undefined,
+): boolean {
+  return Boolean(blockedToolNames?.includes(normalizeToolName(toolName)));
 }
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {

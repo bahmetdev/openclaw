@@ -6,6 +6,7 @@ type TelegramInboundEventDeliveryEnd = () => void;
 type ActiveInboundEvent = {
   outboundTo: string;
   outboundAccountId?: string;
+  guestQueryId?: string;
   markInboundEventDelivered: () => void;
 };
 
@@ -91,4 +92,27 @@ export function notifyTelegramInboundEventOutboundSuccess(params: {
     return;
   }
   event.markInboundEventDelivered();
+}
+
+export function resolveTelegramInboundEventGuestQuery(params: {
+  sessionKey: string | undefined;
+  to: string;
+  accountId?: string | null;
+  inboundEventKind?: string;
+}): { guestQueryId: string } | null {
+  const key = resolveTelegramInboundEventDeliveryCorrelationKey(
+    params.sessionKey,
+    params.inboundEventKind,
+  );
+  if (!key) {
+    return null;
+  }
+  const event = registry.get(key);
+  if (!event?.guestQueryId || !telegramDeliveryTargetsMatch(event.outboundTo, params.to)) {
+    return null;
+  }
+  if (event.outboundAccountId && params.accountId && params.accountId !== event.outboundAccountId) {
+    return null;
+  }
+  return { guestQueryId: event.guestQueryId };
 }

@@ -37,6 +37,7 @@ import {
   renderTelegramHtmlText,
   wrapFileReferencesInHtml,
 } from "../format.js";
+import { answerTelegramGuestQuery } from "../guest-query.js";
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { splitTelegramRichMessageTextChunks, TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
 import { isTelegramHtmlParseError } from "../rich-plain-fallback.js";
@@ -833,6 +834,7 @@ export async function deliverReplies(params: {
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
   transcriptMirror?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  guestQueryId?: string;
 }): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
@@ -870,6 +872,66 @@ export async function deliverReplies(params: {
       surface: "telegram",
     }),
   );
+  const originalExactSilentCount = candidateReplies.filter(
+    (reply) => typeof reply.text === "string" && reply.text.trim().toUpperCase() === "NO_REPLY",
+  ).length;
+  if (params.guestQueryId) {
+    const guestReply = normalizedReplies.find((reply) => {
+      const mediaList = reply?.mediaUrls?.length
+        ? reply.mediaUrls
+        : reply?.mediaUrl
+          ? [reply.mediaUrl]
+          : [];
+      const text =
+        resolveTelegramInteractiveTextFallback({
+          text: reply?.text,
+          interactive: reply?.interactive,
+        }) ??
+        reply?.text ??
+        "";
+      return text.trim().length > 0 || mediaList.length > 0;
+    });
+    const guestText = guestReply
+      ? (resolveTelegramInteractiveTextFallback({
+          text: guestReply.text,
+          interactive: guestReply.interactive,
+        }) ??
+        guestReply.text ??
+        "")
+      : "";
+    await answerTelegramGuestQuery({
+      token: params.token,
+      guestQueryId: params.guestQueryId,
+      text:
+        guestText.trim() ||
+        "I generated a reply, but Telegram Guest Mode can only receive a single text response here.",
+    });
+    if (transcriptMirror && guestText.trim()) {
+      await transcriptMirror({ text: guestText });
+    }
+    emitMessageSentHooks({
+      hookRunner,
+      enabled: hasMessageSentHooks,
+      sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+      chatId: params.chatId,
+      accountId: params.accountId,
+      content: guestText,
+      success: true,
+      isGroup: params.mirrorIsGroup,
+      groupId: params.mirrorGroupId,
+    });
+    return { delivered: true };
+  }
+
+  if (originalExactSilentCount > 0) {
+    silentReplyLogger.debug("telegram delivery normalized NO_REPLY candidates", {
+      hasSessionKey: Boolean(params.sessionKeyForInternalHooks),
+      hasChatId: params.chatId.length > 0,
+      originalCount: candidateReplies.length,
+      normalizedCount: normalizedReplies.length,
+      originalExactSilentCount,
+    });
+  }
   for (const originalReply of normalizedReplies) {
     let reply = originalReply;
     const mediaList = reply?.mediaUrls?.length

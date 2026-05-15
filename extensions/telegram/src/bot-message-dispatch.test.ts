@@ -694,7 +694,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(
       typeof (dispatchParams.dispatcherOptions as { beforeDeliver?: unknown }).beforeDeliver,
     ).toBe("function");
-    expectRecordFields(dispatchParams.replyOptions, { disableBlockStreaming: true });
+    expectRecordFields(dispatchParams.replyOptions, {
+      bootstrapContextMode: "lightweight",
+      disableBlockStreaming: true,
+      toolsAllow: ["message"],
+    });
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });

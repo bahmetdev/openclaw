@@ -821,6 +821,7 @@ export const dispatchTelegramMessage = async ({
     removeAckAfterReply,
     statusReactionController: rawStatusReactionController,
   } = dispatchContext;
+  const { guestQueryId } = context;
   const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
   const statusReactionController = isRoomEvent ? null : rawStatusReactionController;
   const statusReactionTiming = {
@@ -1564,6 +1565,7 @@ export const dispatchTelegramMessage = async ({
       {
         outboundTo: historyKey || String(chatId),
         outboundAccountId: route.accountId,
+        guestQueryId,
         markInboundEventDelivered: () => {
           deliveryState.markDelivered();
         },

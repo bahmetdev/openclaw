@@ -3745,6 +3745,43 @@ export const registerTelegramHandlers = ({
     }
   };
 
+  bot.use(async (ctx, next) => {
+    const guestMessage = (ctx.update as { guest_message?: Message } | undefined)?.guest_message;
+    if (!guestMessage) {
+      await next();
+      return;
+    }
+    const guestQueryId = (guestMessage as { guest_query_id?: unknown }).guest_query_id;
+    if (typeof guestQueryId !== "string" || guestQueryId.length === 0) {
+      logVerbose("telegram: skipped guest_message without guest_query_id");
+      return;
+    }
+    const isGroup = guestMessage.chat.type === "group" || guestMessage.chat.type === "supergroup";
+    const isForum = await resolveTelegramForumFlag({
+      chatId: guestMessage.chat.id,
+      chatType: guestMessage.chat.type,
+      isGroup,
+      isForum: guestMessage.chat.is_forum,
+      getChat,
+    });
+    const normalizedMsg = withResolvedTelegramForumFlag(guestMessage, isForum);
+    await handleInboundMessageLike({
+      ctxForDedupe: ctx as TelegramUpdateKeyContext,
+      ctx: buildSyntheticContext(ctx, normalizedMsg),
+      msg: normalizedMsg,
+      chatId: normalizedMsg.chat.id,
+      isGroup,
+      isForum,
+      messageThreadId: normalizedMsg.message_thread_id,
+      senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
+      senderUsername: normalizedMsg.from?.username ?? "",
+      requireConfiguredGroup: false,
+      sendOversizeWarning: false,
+      oversizeLogMessage: "guest media exceeds size limit",
+      errorMessage: "guest handler failed",
+    });
+  });
+
   bot.on("message", async (ctx) => {
     const msg = ctx.message;
     if (!msg) {
