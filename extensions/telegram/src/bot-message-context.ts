@@ -144,13 +144,13 @@ export const buildTelegramMessageContext = async ({
   sendChatActionHandler,
 }: BuildTelegramMessageContextParams): Promise<TelegramMessageContext | null> => {
   const msg = primaryCtx.message;
+  const chatId = msg.chat.id;
+  const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+  const senderId = msg.from?.id ? String(msg.from.id) : "";
   const guestQueryId =
     typeof (msg as { guest_query_id?: unknown }).guest_query_id === "string"
       ? (msg as { guest_query_id: string }).guest_query_id
       : undefined;
-  const chatId = msg.chat.id;
-  const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
-  const senderId = msg.from?.id ? String(msg.from.id) : "";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
   const reactionApi =
     typeof bot.api.setMessageReaction === "function"
@@ -244,18 +244,18 @@ export const buildTelegramMessageContext = async ({
   const freshCfg =
     loadFreshConfig?.() ??
     (runtime?.getRuntimeConfig ?? (await loadTelegramMessageContextRuntime()).getRuntimeConfig)();
-  const conversationRoute = resolveTelegramConversationRoute({
+  // Guest messages arrive from the caller but belong to the target chat.
+  const senderIdForRouting = guestQueryId ? undefined : senderId;
+  let { route, bindingMode } = resolveTelegramConversationRoute({
     cfg: freshCfg,
     accountId: account.accountId,
     chatId,
     isGroup,
     resolvedThreadId,
     replyThreadId,
-    senderId,
+    senderId: senderIdForRouting,
     topicAgentId: topicConfig?.agentId,
   });
-  const { bindingMode } = conversationRoute;
-  let { route } = conversationRoute;
   const requiresExplicitAccountBinding = (
     candidate: ReturnType<typeof resolveTelegramConversationRoute>["route"],
   ): boolean =>
@@ -407,7 +407,7 @@ export const buildTelegramMessageContext = async ({
     route,
     chatId,
     isGroup,
-    senderId,
+    senderId: senderIdForRouting,
   });
   const useDmThreadSession = shouldUseTelegramDmThreadSession({
     dmThreadId,

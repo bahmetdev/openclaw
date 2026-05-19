@@ -108,6 +108,70 @@ Token resolution is account-aware: `tokenFile` beats `botToken` beats env, and c
   </Accordion>
 </AccordionGroup>
 
+## Guest Mode and inline anywhere
+
+Telegram Guest Mode lets a bot answer a user who mentions it in a chat where the bot is not a member. This is different from normal group delivery and from inline query search.
+
+### BotFather and Bot API prerequisites
+
+Enable these bot-side features in BotFather before debugging OpenClaw routing:
+
+- Guest Chat Mode: on. `getMe` should report `supports_guest_queries: true`.
+- Inline Mode: optional. It only controls whether Telegram shows the bot in the inline picker/search UI. `getMe` reports this as `supports_inline_queries: true`.
+- Allow Groups and Chat Access Mode are not required for Guest Mode replies. Guest Mode is for chats where the bot was not invited.
+
+If the inline picker never appears, fix BotFather inline mode first. If the picker appears but no reply is delivered, debug the OpenClaw `guest_message` and `answerGuestQuery` path instead.
+
+### Access control
+
+Guest messages still use sender authorization. For private one-owner bots, keep the caller numeric Telegram user ID in `channels.telegram.allowFrom`.
+
+For Guest Mode, the chat that receives the answer may be a chat where the bot is not a member. OpenClaw therefore checks the sender allowlist, but it must not require the target chat itself to be present in `channels.telegram.groups`.
+
+### Inbound update shapes
+
+Telegram can deliver AI-anywhere traffic as either:
+
+- `guest_message`, with `guest_query_id`, `chat.id` for the target chat, and `from.id` for the user who invoked the bot.
+- a regular `message` update that still contains `guest_query_id` on some clients or fallback paths.
+
+OpenClaw treats both shapes as guest-capable when `guest_query_id` is present. The routing identity for a guest message is the target `chat.id`, not the invoking `from.id`; otherwise the answer is correlated to the caller DM session and may never appear in the target chat.
+
+### Reply delivery
+
+Guest replies must use Telegram Bot API `answerGuestQuery`. A normal `sendMessage` to the target chat is not a substitute because the bot is not necessarily a chat member.
+
+During an inbound turn, OpenClaw records a delivery correlation:
+
+- `sessionKey`: the session used for the target chat, for example `agent:main:telegram:direct:1992612346`.
+- `outboundTo`: the target Telegram chat id, for example `1992612346`.
+- `guestQueryId`: Telegram `guest_query_id` from the inbound update.
+
+When the `message` tool sends the final answer, the Telegram action runtime resolves that correlation and calls `answerGuestQuery`. Targets can arrive as either `1992612346` or `telegram:1992612346`; both forms must normalize to the same destination.
+
+### Debug checklist
+
+1. Verify BotFather state with `getMe`: `supports_guest_queries: true`; `supports_inline_queries: true` only if you need the inline picker.
+2. Turn on temporary ingress diagnostics only while debugging:
+
+```bash
+systemctl --user set-environment OPENCLAW_LOG_LEVEL=debug OPENCLAW_DEBUG_TELEGRAM_INGRESS=1
+systemctl --user restart openclaw-gateway.service
+```
+
+3. Send a mention from a chat where the bot is not a member, for example `@YourBot hello`.
+4. In logs, confirm the inbound update has `guest_message` or a `message` with `guest_query_id`.
+5. Confirm the queued session key is based on the target `chat.id`, not the caller `from.id`.
+6. Confirm `message.action` resolves the guest turn and calls `answerGuestQuery`.
+7. After debugging, turn raw ingress logs back off:
+
+```bash
+systemctl --user unset-environment OPENCLAW_LOG_LEVEL OPENCLAW_DEBUG_TELEGRAM_INGRESS
+systemctl --user restart openclaw-gateway.service
+```
+
+A successful Guest Mode reply can appear as a normal bot-authored answer in the target chat, sometimes after the model run finishes rather than immediately after the mention.
+
 ## Access control and activation
 
 ### Group bot identity

@@ -319,6 +319,7 @@ const grammySpies = vi.hoisted(() => ({
     (_: string, __?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => undefined,
   ),
   answerCallbackQuerySpy: vi.fn(async () => undefined) as AnyAsyncMock,
+  answerInlineQuerySpy: vi.fn(async () => true) as AnyAsyncMock,
   sendChatActionSpy: vi.fn(),
   editMessageTextSpy: vi.fn(async () => ({ message_id: 88 })) as AnyAsyncMock,
   editMessageReplyMarkupSpy: vi.fn(async () => ({ message_id: 88 })) as AnyAsyncMock,
@@ -345,6 +346,7 @@ export const botCtorSpy: MockFn<
   (token: string, options?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => void
 > = grammySpies.botCtorSpy;
 export const answerCallbackQuerySpy: AnyAsyncMock = grammySpies.answerCallbackQuerySpy;
+export const answerInlineQuerySpy: AnyAsyncMock = grammySpies.answerInlineQuerySpy;
 export const sendChatActionSpy: AnyMock = grammySpies.sendChatActionSpy;
 export const editMessageTextSpy: AnyAsyncMock = grammySpies.editMessageTextSpy;
 export const editMessageReplyMarkupSpy: AnyAsyncMock = grammySpies.editMessageReplyMarkupSpy;
@@ -404,6 +406,7 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
     api = {
       config: { use: grammySpies.useSpy },
       answerCallbackQuery: grammySpies.answerCallbackQuerySpy,
+      answerInlineQuery: grammySpies.answerInlineQuerySpy,
       sendChatAction: grammySpies.sendChatActionSpy,
       editMessageText: grammySpies.editMessageTextSpy,
       editMessageReplyMarkup: grammySpies.editMessageReplyMarkupSpy,
@@ -642,6 +645,8 @@ beforeEach(() => {
   setMessageReactionSpy.mockResolvedValue(undefined);
   answerCallbackQuerySpy.mockReset();
   answerCallbackQuerySpy.mockResolvedValue(undefined);
+  answerInlineQuerySpy.mockReset();
+  answerInlineQuerySpy.mockResolvedValue(true);
   sendChatActionSpy.mockReset();
   sendChatActionSpy.mockResolvedValue(undefined);
   setMyCommandsSpy.mockReset();

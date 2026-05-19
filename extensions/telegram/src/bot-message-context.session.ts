@@ -488,6 +488,10 @@ export async function buildTelegramInboundContextPayload(params: {
         ? groupHistoryPromptEntries
         : undefined
       : undefined;
+  const guestQueryId =
+    typeof (msg as { guest_query_id?: unknown }).guest_query_id === "string"
+      ? (msg as { guest_query_id: string }).guest_query_id
+      : undefined;
   const ctxPayload = await sessionRuntime.buildChannelInboundEventContext({
     channel: "telegram",
     resolveSupplementalMedia: true,
@@ -611,6 +615,7 @@ export async function buildTelegramInboundContextPayload(params: {
       ForwardedFromChatType: visibleForwardOrigin?.fromChatType,
       ForwardedFromMessageId: visibleForwardOrigin?.fromMessageId,
       WasMentioned: isGroup ? effectiveWasMentioned : undefined,
+      GuestQueryId: guestQueryId,
       Sticker: allMedia[0]?.stickerMetadata,
       StickerMediaIncluded: allMedia[0]?.stickerMetadata ? currentMediaFacts.length > 0 : undefined,
       SkipStickerMediaUnderstanding: stickerCacheHit ? true : undefined,

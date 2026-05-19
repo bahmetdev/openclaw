@@ -22,6 +22,7 @@ const tempStateDirs: string[] = [];
 let previousStateDir: string | undefined;
 const {
   answerCallbackQuerySpy,
+  answerInlineQuerySpy,
   botCtorSpy,
   commandSpy,
   dispatchReplyWithBufferedBlockDispatcher,
@@ -4286,6 +4287,228 @@ describe("createTelegramBot", () => {
     });
   }
 
+  async function dispatchGuestMessage(params: {
+    guestMessage: Record<string, unknown>;
+    me?: Record<string, unknown>;
+  }) {
+    createTelegramBot({ token: "tok" });
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
+          typeof fn === "function",
+      );
+    let idx = -1;
+    const ctx = {
+      update: {
+        update_id: 30_001,
+        guest_message: params.guestMessage,
+      },
+      me: params.me ?? { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+    const dispatch = async (i: number): Promise<void> => {
+      if (i <= idx) {
+        throw new Error("middleware dispatch called multiple times");
+      }
+      idx = i;
+      const fn = middlewares[i];
+      if (!fn) {
+        throw new Error("guest_message was not handled");
+      }
+      await fn(ctx, async () => dispatch(i + 1));
+    };
+    await dispatch(0);
+  }
+
+  it("allows guest messages from allowlisted senders without requiring the chat allowlist", async () => {
+    resetHarnessSpies();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          allowFrom: ["123456789"],
+        },
+      },
+    });
+
+    await dispatchGuestMessage({
+      guestMessage: {
+        chat: { id: -100123456789, type: "group", title: "Outside Group" },
+        from: { id: 123456789, username: "testuser" },
+        text: "@openclaw_bot hello",
+        date: 1736380800,
+        message_id: 30_001,
+        guest_query_id: "guest-query-1",
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks guest messages from senders outside the group allowlist", async () => {
+    resetHarnessSpies();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          allowFrom: ["123456789"],
+        },
+      },
+    });
+
+    await dispatchGuestMessage({
+      guestMessage: {
+        chat: { id: -100123456789, type: "group", title: "Outside Group" },
+        from: { id: 999999, username: "random" },
+        text: "@openclaw_bot hello",
+        date: 1736380800,
+        message_id: 30_002,
+        guest_query_id: "guest-query-2",
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(0);
+  });
+
+  it("treats message updates with guest_query_id as guest messages", async () => {
+    resetHarnessSpies();
+    loadConfig.mockReturnValue({
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          allowFrom: ["123456789"],
+        },
+      },
+    });
+
+    await dispatchMessage({
+      message: {
+        chat: { id: 1992612346, type: "private", first_name: "Alisa" },
+        from: { id: 123456789, username: "testuser" },
+        text: "@openclaw_bot hello",
+        date: 1736380800,
+        message_id: 30_003,
+        guest_query_id: "guest-query-3",
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy.mock.calls.at(0)?.[0]).toMatchObject({
+      GuestQueryId: "guest-query-3",
+      From: "telegram:1992612346",
+      To: "telegram:1992612346",
+    });
+    expect(replySpy.mock.calls.at(0)?.[0].SessionKey).toContain("direct:1992612346");
+    expect(replySpy.mock.calls.at(0)?.[0].SessionKey).not.toContain("direct:123456789");
+  });
+
+  it("answers inline queries from allowed senders", async () => {
+    resetHarnessSpies();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          allowFrom: ["123456789"],
+        },
+      },
+    });
+
+    createTelegramBot({
+      token: "tok",
+      botInfo: {
+        id: 1,
+        is_bot: true,
+        first_name: "Claw",
+        username: "VitaliiClawBot",
+        can_join_groups: true,
+        can_read_all_group_messages: false,
+        can_manage_bots: false,
+        supports_inline_queries: true,
+        can_connect_to_business: false,
+        has_main_web_app: false,
+        has_topics_enabled: false,
+        allows_users_to_create_topics: false,
+      },
+    });
+    const handler = getOnHandler("inline_query") as (ctx: Record<string, unknown>) => Promise<void>;
+    await handler({
+      inlineQuery: {
+        id: "inline-1",
+        from: { id: 123456789, username: "testuser" },
+        query: "translate this",
+        offset: "",
+        chat_type: "group",
+      },
+    });
+
+    expect(answerInlineQuerySpy).toHaveBeenCalledWith(
+      "inline-1",
+      [
+        expect.objectContaining({
+          type: "article",
+          title: "Ask Claw: translate this",
+          input_message_content: expect.objectContaining({
+            message_text: "@VitaliiClawBot translate this",
+          }),
+        }),
+      ],
+      expect.objectContaining({ cache_time: 1, is_personal: true }),
+    );
+  });
+
+  it("swallows stale inline query errors so polling can continue", async () => {
+    resetHarnessSpies();
+    answerInlineQuerySpy.mockRejectedValueOnce(
+      new Error(
+        "GrammyError in middleware: Call to answerInlineQuery failed! (400: Bad Request: query is too old and response timeout expired or query ID is invalid)",
+      ),
+    );
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("inline_query") as (ctx: Record<string, unknown>) => Promise<void>;
+    await expect(
+      handler({
+        inlineQuery: {
+          id: "inline-old",
+          from: { id: 123456789, username: "testuser" },
+          query: "old",
+          offset: "",
+          chat_type: "private",
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("returns no inline results for blocked senders", async () => {
+    resetHarnessSpies();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          allowFrom: ["123456789"],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("inline_query") as (ctx: Record<string, unknown>) => Promise<void>;
+    await handler({
+      inlineQuery: {
+        id: "inline-2",
+        from: { id: 999999, username: "random" },
+        query: "hello",
+        offset: "",
+        chat_type: "group",
+      },
+    });
+
+    expect(answerInlineQuerySpy).toHaveBeenCalledWith(
+      "inline-2",
+      [],
+      expect.objectContaining({ cache_time: 1, is_personal: true }),
+    );
+  });
+
   it("accepts mentionPatterns matches with and without unrelated mentions", async () => {
     const cases = [
       {
@@ -4836,7 +5059,7 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 1,
     },
     {
-      name: "matches direct message allowFrom against sender user id when chat id differs",
+      name: "allows ordinary direct messages when sender user id differs from private chat id",
       config: {
         channels: {
           telegram: {
@@ -4905,6 +5128,30 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 0,
     },
   ];
+
+  it("falls back to ordinary direct-like bot mentions whose sender differs from the private chat", async () => {
+    resetHarnessSpies();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          allowFrom: ["123456789"],
+        },
+      },
+    });
+
+    await dispatchMessage({
+      message: {
+        chat: { id: 777777777, type: "private" },
+        from: { id: 123456789, username: "testuser" },
+        text: "@openclaw_bot hello",
+        entities: [{ type: "mention", offset: 0, length: 13 }],
+        date: 1736380800,
+        message_id: 2_500,
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
 
   it("applies allowFrom edge cases", async () => {
     for (const [index, testCase] of allowFromEdgeCases.entries()) {
