@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   beginTelegramInboundTurnDeliveryCorrelation,
   notifyTelegramInboundTurnOutboundSuccess,
+  resolveTelegramInboundTurnGuestQuery,
 } from "./inbound-turn-delivery.js";
 
 describe("telegram inbound turn delivery", () => {
@@ -27,6 +28,33 @@ describe("telegram inbound turn delivery", () => {
       accountId: "a1",
     });
     expect(count).toBe(1);
+  });
+
+  it("matches telegram-prefixed destinations for guest replies", () => {
+    let count = 0;
+    const end = beginTelegramInboundTurnDeliveryCorrelation("sess:guest", {
+      outboundTo: "1992612346",
+      guestQueryId: "guest-1",
+      markInboundTurnDelivered: () => {
+        count += 1;
+      },
+    });
+
+    expect(
+      resolveTelegramInboundTurnGuestQuery({
+        sessionKey: "sess:guest",
+        to: "telegram:1992612346",
+        accountId: undefined,
+      }),
+    ).toStrictEqual({ guestQueryId: "guest-1" });
+
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: "sess:guest",
+      to: "telegram:1992612346",
+      accountId: undefined,
+    });
+    expect(count).toBe(1);
+    end();
   });
 
   it("ignores outbound sends to another destination", () => {

@@ -1,4 +1,4 @@
-import type { Message, ReactionTypeEmoji } from "grammy/types";
+import type { InlineQueryResult, Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
@@ -41,6 +41,8 @@ import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
+  isSenderAllowed,
+  normalizeAllowFrom,
   normalizeDmAllowFromWithStore,
   firstDefined,
   resolveTelegramEffectiveDmPolicy,
@@ -208,6 +210,27 @@ export const registerTelegramHandlers = ({
     timer: ReturnType<typeof setTimeout>;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
+
+  const buildInlineQueryResults = (query: string): InlineQueryResult[] => {
+    const trimmed = query.trim().slice(0, 256);
+    const botUsername = opts.botInfo?.username ?? "VitaliiClawBot";
+    const messageText = trimmed.length > 0 ? `@${botUsername} ${trimmed}` : `@${botUsername} `;
+    return [
+      {
+        type: "article",
+        id: "ask-claw",
+        title: trimmed.length > 0 ? `Ask Claw: ${trimmed}` : "Ask Claw",
+        description:
+          trimmed.length > 0
+            ? "Send this request to Claw in the current chat."
+            : "Type a request after the bot username.",
+        input_message_content: {
+          message_text: messageText,
+          link_preview_options: { is_disabled: true },
+        },
+      },
+    ];
+  };
   let textFragmentProcessing: Promise<void> = Promise.resolve();
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
@@ -1019,6 +1042,7 @@ export const registerTelegramHandlers = ({
     resolvedThreadId?: number;
     senderId: string;
     senderUsername: string;
+    isGuest?: boolean;
     effectiveGroupAllow: NormalizedAllowFrom;
     hasGroupAllowOverride: boolean;
     groupConfig?: TelegramGroupConfig;
@@ -1031,6 +1055,7 @@ export const registerTelegramHandlers = ({
       resolvedThreadId,
       senderId,
       senderUsername,
+      isGuest,
       effectiveGroupAllow,
       hasGroupAllowOverride,
       groupConfig,
@@ -1082,7 +1107,7 @@ export const registerTelegramHandlers = ({
       enforceAllowlistAuthorization: true,
       allowEmptyAllowlistEntries: false,
       requireSenderForAllowlistAuthorization: true,
-      checkChatAllowlist: true,
+      checkChatAllowlist: !isGuest,
     });
     if (!policyAccess.allowed) {
       if (policyAccess.reason === "group-policy-disabled") {
@@ -2399,6 +2424,58 @@ export const registerTelegramHandlers = ({
     }
   });
 
+  const isStaleInlineQueryError = (err: unknown): boolean => {
+    const text = String(err instanceof Error ? err.message : err);
+    return (
+      text.includes("query is too old") ||
+      text.includes("response timeout expired") ||
+      text.includes("query ID is invalid")
+    );
+  };
+
+  const answerInlineQuerySafely = async (
+    inlineQueryId: string,
+    results: InlineQueryResult[],
+  ): Promise<void> => {
+    try {
+      await bot.api.answerInlineQuery(inlineQueryId, results, {
+        cache_time: 1,
+        is_personal: true,
+      });
+    } catch (err) {
+      if (isStaleInlineQueryError(err)) {
+        logVerbose(`telegram: ignored stale inline_query ${inlineQueryId}`);
+        return;
+      }
+      throw err;
+    }
+  };
+
+  bot.on("inline_query", async (ctx) => {
+    const inlineQuery = ctx.inlineQuery;
+    if (!inlineQuery?.id) {
+      return;
+    }
+    const senderId = inlineQuery.from?.id != null ? String(inlineQuery.from.id) : "";
+    const senderUsername = inlineQuery.from?.username ?? "";
+    logVerbose(
+      `telegram: received inline_query from ${senderId || "unknown"} (${inlineQuery.query.length} chars)`,
+    );
+    const inlineAllow = normalizeAllowFrom(allowFrom);
+    if (
+      inlineAllow.hasEntries &&
+      !isSenderAllowed({
+        allow: inlineAllow,
+        senderId,
+        senderUsername,
+      })
+    ) {
+      await answerInlineQuerySafely(inlineQuery.id, []);
+      return;
+    }
+    await answerInlineQuerySafely(inlineQuery.id, buildInlineQueryResults(inlineQuery.query));
+  });
+
   // Handle group migration to supergroup (chat ID changes)
   bot.on("message:migrate_to_chat_id", async (ctx) => {
     try {
@@ -2467,6 +2544,7 @@ export const registerTelegramHandlers = ({
     messageThreadId?: number;
     senderId: string;
     senderUsername: string;
+    isGuest?: boolean;
     requireConfiguredGroup: boolean;
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
@@ -2572,6 +2650,7 @@ export const registerTelegramHandlers = ({
           resolvedThreadId,
           senderId: event.senderId,
           senderUsername: event.senderUsername,
+          isGuest: event.isGuest,
           effectiveGroupAllow,
           hasGroupAllowOverride,
           groupConfig,
@@ -2645,6 +2724,11 @@ export const registerTelegramHandlers = ({
       logVerbose("telegram: skipped guest_message without guest_query_id");
       return;
     }
+    logVerbose(
+      `telegram: received guest_message ${guestMessage.chat.id} from ${
+        guestMessage.from?.id ?? "unknown"
+      } (${(guestMessage.text ?? guestMessage.caption ?? "").length} chars)`,
+    );
     const isGroup = guestMessage.chat.type === "group" || guestMessage.chat.type === "supergroup";
     const isForum = await resolveTelegramForumFlag({
       chatId: guestMessage.chat.id,
@@ -2664,6 +2748,7 @@ export const registerTelegramHandlers = ({
       messageThreadId: normalizedMsg.message_thread_id,
       senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
       senderUsername: normalizedMsg.from?.username ?? "",
+      isGuest: true,
       requireConfiguredGroup: false,
       sendOversizeWarning: false,
       oversizeLogMessage: "guest media exceeds size limit",
@@ -2690,6 +2775,9 @@ export const registerTelegramHandlers = ({
     if (normalizedMsg.from?.id != null && normalizedMsg.from.id === ctx.me?.id) {
       return;
     }
+    const messageGuestQueryId = (normalizedMsg as { guest_query_id?: unknown }).guest_query_id;
+    const isGuestMessage =
+      typeof messageGuestQueryId === "string" && messageGuestQueryId.length > 0;
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, normalizedMsg),
@@ -2700,10 +2788,13 @@ export const registerTelegramHandlers = ({
       messageThreadId: normalizedMsg.message_thread_id,
       senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
       senderUsername: normalizedMsg.from?.username ?? "",
+      isGuest: isGuestMessage,
       requireConfiguredGroup: false,
-      sendOversizeWarning: true,
-      oversizeLogMessage: "media exceeds size limit",
-      errorMessage: "handler failed",
+      sendOversizeWarning: !isGuestMessage,
+      oversizeLogMessage: isGuestMessage
+        ? "guest media exceeds size limit"
+        : "media exceeds size limit",
+      errorMessage: isGuestMessage ? "guest handler failed" : "handler failed",
     });
   });
 
